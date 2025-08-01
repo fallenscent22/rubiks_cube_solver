@@ -1,0 +1,526 @@
+import numpy as np
+import time
+from collections import deque
+
+class RubiksCube:
+    """
+    Rubik's Cube model and solver. Supports 2x2, 3x3, 4x4+ cubes.
+    Faces: 0=Front(Green), 1=Back(Blue), 2=Left(Orange), 3=Right(Red), 4=Up(White), 5=Down(Yellow)
+    """
+    def __init__(self, n=3):
+        self.n = n
+        self.faces = np.empty((6, n, n), dtype=int)
+        self.faces[0] = 0  # Green
+        self.faces[1] = 1  # Blue
+        self.faces[2] = 2  # Orange
+        self.faces[3] = 3  # Red
+        self.faces[4] = 4  # White
+        self.faces[5] = 5  # Yellow
+        self.color_names = ['Green', 'Blue', 'Orange', 'Red', 'White', 'Yellow']
+        self.color_codes = ['#009B48', '#0046AD', '#FF5800', '#B71234', '#FFFFFF', '#FFD500']
+        self.move_mapping = {
+            'F': (0, 1), 'B': (1, 1), 'L': (2, 1), 'R': (3, 1), 'U': (4, 1), 'D': (5, 1),
+            "F'": (0, -1), "B'": (1, -1), "L'": (2, -1), "R'": (3, -1), "U'": (4, -1), "D'": (5, -1),
+            'F2': (0, 2), 'B2': (1, 2), 'L2': (2, 2), 'R2': (3, 2), 'U2': (4, 2), 'D2': (5, 2),
+            'M': (6, 1), "M'": (6, -1), 'M2': (6, 2),
+            'E': (7, 1), "E'": (7, -1), 'E2': (7, 2),
+            'S': (8, 1), "S'": (8, -1), 'S2': (8, 2)
+        }
+        last = self.n - 1
+        self.adjacent_faces = {
+            0: [(4, last, 'row', 'natural'), (3, 0, 'col', 'natural'), (5, 0, 'row', 'reverse'), (2, last, 'col', 'reverse')],
+            1: [(4, 0, 'row', 'reverse'), (2, 0, 'col', 'natural'), (5, last, 'row', 'natural'), (3, last, 'col', 'reverse')],
+            2: [(4, 0, 'col', 'reverse'), (0, 0, 'col', 'reverse'), (5, 0, 'col', 'reverse'), (1, last, 'col', 'natural')],
+            3: [(4, last, 'col', 'natural'), (1, 0, 'col', 'reverse'), (5, last, 'col', 'natural'), (0, last, 'col', 'natural')],
+            4: [(1, 0, 'row', 'reverse'), (3, 0, 'row', 'natural'), (0, 0, 'row', 'natural'), (2, 0, 'row', 'natural')],
+            5: [(0, last, 'row', 'natural'), (3, last, 'row', 'natural'), (1, last, 'row', 'reverse'), (2, last, 'row', 'natural')]
+        }
+        self.move_history = []
+        self.move_count = 0
+        self.state_cache = {}
+        self.animating = False
+        self.animation_queue = deque()
+        self.current_animation_move = None
+        self.animation_progress = 0
+        self.animation_speed = 5
+        self.solution_steps = []
+        self.current_step_index = 0
+        self.move_explanations = {
+            'F': "Front face clockwise", "F'": "Front face counter-clockwise", 'F2': "Front face 180°",
+            'U': "Upper face clockwise", "U'": "Upper face counter-clockwise", 'U2': "Upper face 180°",
+            'R': "Right face clockwise", "R'": "Right face counter-clockwise", 'R2': "Right face 180°",
+            'L': "Left face clockwise", "L'": "Left face counter-clockwise", 'L2': "Left face 180°",
+            'D': "Down face clockwise", "D'": "Down face counter-clockwise", 'D2': "Down face 180°",
+            'B': "Back face clockwise", "B'": "Back face counter-clockwise", 'B2': "Back face 180°"
+        }
+
+    def rotate_face(self, face, direction):
+        state_hash = self.state_hash()
+        if state_hash in self.state_cache:
+            self.faces = self.state_cache[state_hash].copy()
+            return
+        rotations = 1 if abs(direction) == 1 else 2
+        if direction > 0:
+            self.faces[face] = np.rot90(self.faces[face], rotations, axes=(1, 0))
+        else:
+            self.faces[face] = np.rot90(self.faces[face], rotations, axes=(0, 1))
+        if self.n == 1:
+            return
+        strips = [self._get_strip(*adj) for adj in self.adjacent_faces[face]]
+        if direction > 0:
+            strips = [strips[-1]] + strips[:-1]
+        else:
+            strips = strips[1:] + [strips[0]]
+        for i, adj in enumerate(self.adjacent_faces[face]):
+            self._set_strip(adj[0], adj[1], adj[2], adj[3], strips[i])
+        self.state_cache[state_hash] = self.faces.copy()
+
+    def state_hash(self):
+        return hash(self.faces.tobytes())
+
+    def _get_strip(self, face, index, strip_type, order):
+        if strip_type == 'row':
+            strip = self.faces[face, index, :].copy()
+        else:
+            strip = self.faces[face, :, index].copy()
+        return strip[::-1] if order == 'reverse' else strip
+
+    def _set_strip(self, face, index, strip_type, order, strip):
+        if order == 'reverse':
+            strip = strip[::-1]
+        if strip_type == 'row':
+            self.faces[face, index, :] = strip
+        else:
+            self.faces[face, :, index] = strip
+
+    def apply_moves(self, moves):
+        moves = moves.split()
+        for move in moves:
+            if move in self.move_mapping:
+                face, direction = self.move_mapping[move]
+                self.rotate_face(face, direction)
+                self.move_history.append(move)
+                self.move_count += 1
+
+    def scramble(self, moves=20):
+        moves_list = [m for m in self.move_mapping.keys() if not m.endswith('2') and not m.endswith("'")]
+        scramble_moves = []
+        prev_move = None
+        for _ in range(moves):
+            while True:
+                move = np.random.choice(moves_list)
+                if not prev_move or not self._is_redundant(prev_move, move):
+                    break
+            scramble_moves.append(move)
+            face, direction = self.move_mapping[move]
+            self.rotate_face(face, direction)
+            prev_move = move
+        return ' '.join(scramble_moves)
+
+    def _is_redundant(self, move1, move2):
+        base1 = move1.replace("'", "").replace("2", "")
+        base2 = move2.replace("'", "").replace("2", "")
+        if base1 != base2:
+            return False
+        if ("'" in move1 and "'" not in move2) or ("'" not in move1 and "'" in move2):
+            return True
+        return False
+
+    def is_solved(self):
+        for face_idx, face in enumerate(self.faces):
+            if not np.all(face == face_idx):
+                return False
+        return True
+
+    def is_superflip(self):
+        if self.n != 3:
+            return False
+        for face in range(6):
+            if self.faces[face, 1, 1] != face:
+                return False
+        edges = [
+            (self.faces[4, 0, 1], self.faces[1, 0, 1]),
+            (self.faces[4, 1, 0], self.faces[2, 0, 1]),
+            (self.faces[4, 1, 2], self.faces[3, 0, 1]),
+            (self.faces[4, 2, 1], self.faces[0, 0, 1]),
+            (self.faces[0, 1, 0], self.faces[2, 1, 2]),
+            (self.faces[0, 1, 2], self.faces[3, 1, 0]),
+            (self.faces[1, 1, 0], self.faces[3, 1, 2]),
+            (self.faces[1, 1, 2], self.faces[2, 1, 0]),
+            (self.faces[5, 0, 1], self.faces[0, 2, 1]),
+            (self.faces[5, 1, 0], self.faces[2, 2, 1]),
+            (self.faces[5, 1, 2], self.faces[3, 2, 1]),
+            (self.faces[5, 2, 1], self.faces[1, 2, 1]),
+        ]
+        solved_edges = [
+            (4, 1), (4, 2), (4, 3), (4, 0),
+            (0, 2), (0, 3), (1, 3), (1, 2),
+            (5, 0), (5, 2), (5, 3), (5, 1)
+        ]
+        for i, (color1, color2) in enumerate(edges):
+            solved1, solved2 = solved_edges[i]
+            if not ((color1 == solved1 and color2 == solved2) or (color1 == solved2 and color2 == solved1)):
+                return False
+        return True
+
+    def solve(self):
+        """
+        Unified solving pipeline for all cube sizes.
+        2x2: Layer-by-layer
+        3x3: Kociemba (optimal) with fallback to human method
+        4x4+: Reduction method (centers, edge pairing, 3x3 solve)
+        """
+        self.move_count = 0
+        self.move_history = []
+        solution = []
+        if self.is_solved():
+            print("Cube is already solved!")
+            self.solution_steps.append({
+                'name': 'Solved',
+                'moves': [],
+                'description': 'The cube is already in a solved state!'
+            })
+            return []
+        if self.n == 2:
+            solution = self._solve_2x2()
+        elif self.n == 3:
+            try:
+                solution = self._solve_3x3()
+            except Exception as e:
+                print(f"Kociemba error: {e}. Falling back to human method.")
+                solution = self._solve_3x3_layer_by_layer()
+        elif self.n >= 4:
+            solution = self._solve_nxn()
+        optimized = self.optimize_moves(solution)
+        # Add solution steps
+        if self.n == 3:
+            self._add_3x3_solution_steps(optimized)
+        else:
+            self.solution_steps.append({
+                'name': f'{self.n}x{self.n} Solution',
+                'moves': optimized,
+                'description': f'Solution for {self.n}x{self.n} cube'
+            })
+        print(f"Solved in {len(optimized)} moves (optimized from {len(solution)})")
+        return optimized
+
+    def _add_3x3_solution_steps(self, moves):
+        phases = [
+            ('White Cross', 8, "Building the white cross on top"),
+            ('White Corners', 4, "Solving white corner pieces"),
+            ('Middle Edges', 4, "Solving middle layer edges"),
+            ('Yellow Cross', 4, "Forming yellow cross on bottom"),
+            ('Orient Yellow', 4, "Orienting yellow edges"),
+            ('Position Corners', 4, "Positioning yellow corners"),
+            ('Orient Corners', 4, "Orienting yellow corners"),
+            ('Final Adjustments', 8, "Final adjustments")
+        ]
+        move_idx = 0
+        for phase_name, max_moves, description in phases:
+            if move_idx >= len(moves):
+                break
+            phase_moves = moves[move_idx:move_idx+max_moves]
+            move_idx += len(phase_moves)
+            self.solution_steps.append({
+                'name': phase_name,
+                'moves': phase_moves,
+                'description': description
+            })
+
+    def _solve_2x2(self):
+        if self.n != 2:
+            return []
+        solution = []
+        solution += self._solve_white_layer_2x2()
+        solution += self._solve_yellow_layer_2x2()
+        self.solution_steps.append({
+            'name': '2x2 Solution',
+            'moves': solution,
+            'description': 'Layer-by-layer solution'
+        })
+        return solution
+
+    def to_kociemba_string(self):
+        """
+        Generate a valid Kociemba cube string for 3x3 cubes.
+        Maps each sticker to the face center color, then to Kociemba's URFDLB notation.
+        Assumes standard orientation: White (U), Green (F), Red (R), Yellow (D), Blue (B), Orange (L).
+        """
+        if self.n != 3:
+            raise ValueError("Kociemba solver only supports 3x3 cubes.")
+        # Face order: U, R, F, D, L, B
+        face_order = [4, 3, 0, 5, 2, 1]
+        color_map = {4: 'U', 3: 'R', 0: 'F', 5: 'D', 2: 'L', 1: 'B'}
+        s = ''
+        for face in face_order:
+            for row in range(3):
+                for col in range(3):
+                    color = self.faces[face, row, col]
+                    s += color_map[color]
+        return s
+
+    def _solve_3x3(self):
+        cube_str = self.to_kociemba_string()
+        # Kociemba expects a 54-character string
+        if len(cube_str) != 54:
+            print(f"Kociemba error: Invalid cube string length {len(cube_str)}. Falling back to layer-by-layer.")
+            return self._solve_3x3_layer_by_layer()
+        try:
+            import kociemba
+        except ImportError:
+            print("Kociemba solver not installed. Falling back to layer-by-layer.")
+            return self._solve_3x3_layer_by_layer()
+        try:
+            solution = kociemba.solve(cube_str)
+            moves = solution.split()
+            for move in moves:
+                if move in self.move_mapping:
+                    face, direction = self.move_mapping[move]
+                    self.rotate_face(face, direction)
+                    self.move_history.append(move)
+                    self.move_count += 1
+            print("Kociemba string:", cube_str)
+            print("Length:", len(cube_str))
+            return moves
+        except Exception as e:
+            print(f"Kociemba error: {e}. Falling back to layer-by-layer.")
+            return self._solve_3x3_layer_by_layer()
+
+    def _solve_3x3_layer_by_layer(self):
+        """
+        Human-like layer-by-layer solver for 3x3 cubes.
+        Follows standard solving steps:
+        1. Make white cross
+        2. Solve white corners
+        3. Solve middle layer edges
+        4. Make yellow cross
+        5. Orient yellow edges
+        6. Position yellow corners
+        7. Orient yellow corners
+        """
+        solution = []
+        solution += self._solve_white_cross()      # Step 1: White cross
+        solution += self._solve_white_corners()    # Step 2: White corners
+        solution += self._solve_middle_edges()     # Step 3: Middle layer
+        solution += self._solve_yellow_cross()     # Step 4: Yellow cross
+        solution += self._solve_yellow_edges()     # Step 5: Orient yellow edges
+        solution += self._solve_yellow_corners()   # Step 6/7: Position & orient yellow corners
+        return solution
+
+    def _solve_white_layer_2x2(self):
+        moves = []
+        for _ in range(4):
+            for _ in range(4):
+                if self.faces[4, 0, 0] == 4:
+                    break
+                self.apply_moves("U")
+                moves.append("U")
+            self.apply_moves("F D F'")
+            moves += ["F", "D", "F'"]
+            self.apply_moves("U'")
+            moves.append("U'")
+        return moves
+
+    def _solve_yellow_layer_2x2(self):
+        moves = []
+        while not np.all(self.faces[5] == 5):
+            self.apply_moves("R U R' U R U2 R'")
+            moves += ["R", "U", "R'", "U", "R", "U2", "R'"]
+        while self.faces[0, 0, 0] != self.faces[0, 0, 1]:
+            self.apply_moves("U")
+            moves.append("U")
+        return moves
+
+    def _solve_white_cross(self):
+        moves = []
+        target_color = 4
+        cross_positions = [
+            (4, 1, 0), (4, 0, 1), (4, 1, 2), (4, 2, 1)
+        ]
+        solved = True
+        for pos in cross_positions:
+            face, row, col = pos
+            if self.faces[face, row, col] != target_color:
+                solved = False
+                break
+        if solved:
+            return moves
+        for _ in range(4):
+            for face in range(6):
+                for i in range(3):
+                    for j in range(3):
+                        if self.faces[face, i, j] == target_color:
+                            if face == 4 and (i, j) in [(1, 0), (0, 1), (1, 2), (2, 1)]:
+                                continue
+                            if face != 5:
+                                self.apply_moves("F R U R' U' F'")
+                                moves += ["F", "R", "U", "R'", "U'", "F'"]
+                            while self.faces[5, 0, 1] != target_color:
+                                self.apply_moves("D")
+                                moves.append("D")
+                            if self.faces[0, 2, 1] == 0:
+                                self.apply_moves("F2")
+                                moves.append("F2")
+        return moves
+
+    def _solve_white_corners(self):
+        moves = []
+        target_color = 4
+        corner_positions = [
+            (4, 0, 0), (4, 0, 2), (4, 2, 0), (4, 2, 2)
+        ]
+        solved = True
+        for pos in corner_positions:
+            face, row, col = pos
+            if self.faces[face, row, col] != target_color:
+                solved = False
+                break
+        if solved:
+            return moves
+        for _ in range(4):
+            for face in range(6):
+                for i in range(3):
+                    for j in range(3):
+                        if self.faces[face, i, j] == target_color:
+                            if face == 4 and (i, j) in [(0, 0), (0, 2), (2, 0), (2, 2)]:
+                                continue
+                            if face != 5:
+                                self.apply_moves("R U R' U'")
+                                moves += ["R", "U", "R'", "U'"]
+                            while not (self.faces[5, 0, 0] == target_color or self.faces[5, 0, 2] == target_color):
+                                self.apply_moves("D")
+                                moves.append("D")
+                            self.apply_moves("R U R'")
+                            moves += ["R", "U", "R'"]
+        return moves
+
+    def _solve_middle_edges(self):
+        moves = []
+        solved = True
+        for face in [0, 1, 2, 3]:
+            if not np.array_equal(self.faces[face, 1, :], [face]*3):
+                solved = False
+                break
+        if solved:
+            return moves
+        for _ in range(4):
+            for face in [0, 1, 2, 3]:
+                if self.faces[face, 1, 0] != face or self.faces[face, 1, 2] != face:
+                    self.apply_moves("U R U' R' U' F' U F")
+                    moves += ["U", "R", "U'", "R'", "U'", "F'", "U", "F"]
+                    break
+        return moves
+
+    def _solve_yellow_cross(self):
+        moves = []
+        target_color = 5
+        cross_positions = [(5, 1, 0), (5, 0, 1), (5, 1, 2), (5, 2, 1)]
+        solved = True
+        for pos in cross_positions:
+            face, row, col = pos
+            if self.faces[face, row, col] != target_color:
+                solved = False
+                break
+        if solved:
+            return moves
+        while True:
+            yellow_count = 0
+            for pos in cross_positions:
+                face, row, col = pos
+                if self.faces[face, row, col] == target_color:
+                    yellow_count += 1
+            if yellow_count == 4:
+                break
+            self.apply_moves("F R U R' U' F'")
+            moves += ["F", "R", "U", "R'", "U'", "F'"]
+        return moves
+
+    def _solve_yellow_edges(self):
+        moves = []
+        solved = True
+        for face in [0, 1, 2, 3]:
+            if self.faces[face, 2, 1] != face:
+                solved = False
+                break
+        if solved:
+            return moves
+        for _ in range(4):
+            while self.faces[0, 2, 1] != 0:
+                self.apply_moves("U")
+                moves.append("U")
+            self.apply_moves("R U R' U R U2 R' U")
+            moves += ["R", "U", "R'", "U", "R", "U2", "R'", "U"]
+        return moves
+
+    def _solve_yellow_corners(self):
+        moves = []
+        target_color = 5
+        for _ in range(4):
+            while self.faces[5, 0, 0] != target_color:
+                self.apply_moves("R' D' R D")
+                moves += ["R'", "D'", "R", "D"]
+            self.apply_moves("U")
+            moves.append("U")
+        for _ in range(4):
+            if self.faces[0, 2, 0] == self.faces[0, 2, 2] == 0:
+                break
+            self.apply_moves("U R U' L' U R' U' L")
+            moves += ["U", "R", "U'", "L'", "U", "R'", "U'", "L"]
+        return moves
+
+    def _solve_nxn(self):
+        """
+        Reduction method for NxN cubes (n >= 4):
+        1. Solve centers
+        2. Pair edges
+        3. Solve as 3x3
+        """
+        solution = []
+        solution += self._solve_centers()
+        solution += self._pair_edges()
+        solution += self._solve_3x3_layer_by_layer()
+        return solution
+
+    def _solve_centers(self):
+        """
+        Placeholder for center-solving logic for NxN cubes.
+        Should solve center pieces for each face.
+        """
+        moves = []
+        # TODO: Implement center solving algorithm
+        # For now, return empty list
+        return moves
+
+    def _pair_edges(self):
+        """
+        Placeholder for edge-pairing logic for NxN cubes.
+        Should pair all edge pieces.
+        """
+        moves = []
+        # TODO: Implement edge pairing algorithm
+        # For now, return empty list
+        return moves
+
+    def optimize_moves(self, moves):
+        optimized = []
+        move_count = {}
+        for move in moves:
+            base = move.replace("'", "").replace("2", "")
+            if base not in move_count:
+                move_count[base] = 0
+            value = 1
+            if "'" in move:
+                value = -1
+            elif "2" in move:
+                value = 2
+            move_count[base] = (move_count[base] + value) % 4
+        for move, count in move_count.items():
+            if count == 0:
+                continue
+            elif count == 1:
+                optimized.append(move)
+            elif count == 2:
+                optimized.append(move + "2")
+            elif count == 3:
+                optimized.append(move + "'")
+        return optimized
