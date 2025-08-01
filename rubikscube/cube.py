@@ -243,20 +243,23 @@ class RubiksCube:
     def to_kociemba_string(self):
         """
         Generate a valid Kociemba cube string for 3x3 cubes.
-        Maps each sticker to the face center color, then to Kociemba's URFDLB notation.
+        Each sticker is mapped to the center color of its face, then to Kociemba's URFDLB notation.
         Assumes standard orientation: White (U), Green (F), Red (R), Yellow (D), Blue (B), Orange (L).
         """
         if self.n != 3:
             raise ValueError("Kociemba solver only supports 3x3 cubes.")
         # Face order: U, R, F, D, L, B
         face_order = [4, 3, 0, 5, 2, 1]
-        color_map = {4: 'U', 3: 'R', 0: 'F', 5: 'D', 2: 'L', 1: 'B'}
+        # Get the center color for each face
+        center_colors = {face: self.faces[face, 1, 1] for face in face_order}
+        # Map color index to Kociemba letter based on center
+        color_map = {center_colors[face]: letter for face, letter in zip(face_order, 'URFDLB')}
         s = ''
         for face in face_order:
             for row in range(3):
                 for col in range(3):
                     color = self.faces[face, row, col]
-                    s += color_map[color]
+                    s += color_map.get(color, 'X')  # 'X' for invalid stickers
         return s
 
     def _solve_3x3(self):
