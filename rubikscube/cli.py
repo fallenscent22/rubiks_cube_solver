@@ -40,5 +40,13 @@ def main():
     if args.size <= 3:
         visualizer.visual_display()
 
+    solution = cube.solve()
+    print("Solution Moves:", solution)
+    print("Solved State:")
+    for face_idx, face in enumerate(cube.faces):
+        print(f"Face {face_idx}:")
+        print(face)
+    print("Is Solved?", cube.is_solved())
+
 if __name__ == "__main__":
     main()
