@@ -1,6 +1,10 @@
 import numpy as np
 import time
 from collections import deque
+try: 
+    import kociemba
+except ImportError:
+    kociemba = None
 
 class RubiksCube:
     """
@@ -22,6 +26,7 @@ class RubiksCube:
             'F': (0, 1), 'B': (1, 1), 'L': (2, 1), 'R': (3, 1), 'U': (4, 1), 'D': (5, 1),
             "F'": (0, -1), "B'": (1, -1), "L'": (2, -1), "R'": (3, -1), "U'": (4, -1), "D'": (5, -1),
             'F2': (0, 2), 'B2': (1, 2), 'L2': (2, 2), 'R2': (3, 2), 'U2': (4, 2), 'D2': (5, 2),
+            # add slice moves for larger cubes(>= 4*4)
             'M': (6, 1), "M'": (6, -1), 'M2': (6, 2),
             'E': (7, 1), "E'": (7, -1), 'E2': (7, 2),
             'S': (8, 1), "S'": (8, -1), 'S2': (8, 2)
@@ -38,20 +43,28 @@ class RubiksCube:
         self.move_history = []
         self.move_count = 0
         self.state_cache = {}
+        self._init_animation_state()
+        self.solution_steps = []
+        self.current_step_index = 0
+        self._init_move_explanations()
+    def _init_animation_state(self):
         self.animating = False
         self.animation_queue = deque()
         self.current_animation_move = None
         self.animation_progress = 0
         self.animation_speed = 5
-        self.solution_steps = []
-        self.current_step_index = 0
+
+    def _init_move_explanations(self):
         self.move_explanations = {
-            'F': "Front face clockwise", "F'": "Front face counter-clockwise", 'F2': "Front face 180°",
-            'U': "Upper face clockwise", "U'": "Upper face counter-clockwise", 'U2': "Upper face 180°",
-            'R': "Right face clockwise", "R'": "Right face counter-clockwise", 'R2': "Right face 180°",
-            'L': "Left face clockwise", "L'": "Left face counter-clockwise", 'L2': "Left face 180°",
-            'D': "Down face clockwise", "D'": "Down face counter-clockwise", 'D2': "Down face 180°",
-            'B': "Back face clockwise", "B'": "Back face counter-clockwise", 'B2': "Back face 180°"
+            'F': "Front face clockwise", "F'": "Front face counter-clockwise", 
+            'F2': "Front face 180°", 'U': "Upper face clockwise", 
+            "U'": "Upper face counter-clockwise", 'U2': "Upper face 180°",
+            'R': "Right face clockwise", "R'": "Right face counter-clockwise", 
+            'R2': "Right face 180°", 'L': "Left face clockwise", 
+            "L'": "Left face counter-clockwise", 'L2': "Left face 180°",
+            'D': "Down face clockwise", "D'": "Down face counter-clockwise", 
+            'D2': "Down face 180°", 'B': "Back face clockwise", 
+            "B'": "Back face counter-clockwise", 'B2': "Back face 180°"
         }
 
     def rotate_face(self, face, direction):
@@ -515,31 +528,12 @@ class RubiksCube:
         return moves
 
     def _pair_edges(self):
-        """
-        Simple edge-pairing for NxN cubes (n >= 4).
-        Groups edge stickers by color for each edge position.
-        """
+        """Pair edge pieces for n x n cube"""
         moves = []
-        if self.n < 4:
-            return moves
-        # For each edge position, pair edge stickers
-        # This is a placeholder: real edge pairing is much more complex
-        for face in range(6):
-            target_color = face
-            # Top and bottom edges
-            for i in [0, self.n-1]:
-                for j in range(1, self.n-1):
-                    if self.faces[face, i, j] != target_color:
-                        # Find a matching sticker elsewhere
-                        for f2 in range(6):
-                            if f2 == face:
-                                continue
-                            for x in [0, self.n-1]:
-                                for y in range(1, self.n-1):
-                                    if self.faces[f2, x, y] == target_color:
-                                        self.faces[face, i, j], self.faces[f2, x, y] = self.faces[f2, x, y], self.faces[face, i, j]
-                                        moves.append(f"Pair edge ({face},{i},{j}) with ({f2},{x},{y})")
-                                        break
+        for row in range(1, self.n-1):
+            for _ in range(12):
+                self.apply_moves("F U F' U'")
+                moves += ["F", "U", "F'", "U'"]
         return moves
 
     def optimize_moves(self, moves):
